@@ -13,7 +13,6 @@ from sklearn.impute import SimpleImputer
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor, GradientBoostingRegressor
 from sklearn.linear_model import LogisticRegression, LinearRegression
 from sklearn.svm import SVC
-from xgboost import XGBClassifier
 from sklearn.metrics import classification_report, mean_squared_error, r2_score
 
 # Streamlit Page Config
