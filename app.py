@@ -40,7 +40,7 @@ logging.basicConfig(filename='automl_errors.log', level=logging.DEBUG,
 # Streamlit Page Config
 st.set_page_config(page_title="AutoML Pro", page_icon="🤖", layout="wide")
 
-# Display warnings for missing dependencies
+# Dependency warnings
 if not tensorflow_available:
     st.warning("TensorFlow not installed. Neural Network models unavailable. Install with 'pip install tensorflow'.")
 if not profiling_available:
@@ -57,7 +57,7 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# Initialize session state
+# Session state
 if 'model_name' not in st.session_state:
     st.session_state.model_name = "model"
 
@@ -67,7 +67,7 @@ st.title("🤖 AutoML Pro: No-Code Machine Learning")
 # Debug mode
 debug_mode = st.checkbox("Enable Debug Mode (logs detailed info)", value=False)
 
-# Folder for datasets
+# Dataset folder
 UPLOADS_FOLDER = "Uploads"
 if not os.path.exists(UPLOADS_FOLDER):
     os.makedirs(UPLOADS_FOLDER)
@@ -223,11 +223,33 @@ if df is not None:
             if debug_mode:
                 logging.debug(f"Features: numeric={num_cols.tolist()}, categorical={cat_cols.tolist()}")
 
-            # Validation
+            # Data Validation
             if task_type == "Classification" and not np.all(y.dtypes.apply(lambda x: np.issubdtype(x, np.number))):
                 st.error("❌ Classification requires numeric target labels (e.g., 0, 1). Encode the target column.")
                 logging.error("Non-numeric target labels for classification")
                 st.stop()
+            if task_type == "Regression":
+                if not np.all(y.dtypes.apply(lambda x: np.issubdtype(x, np.number))):
+                    st.error("❌ Regression target must be numeric. Check for non-numeric values in 'Price'.")
+                    logging.error("Non-numeric values in regression target")
+                    st.stop()
+                if y.isna().any():
+                    st.error("❌ Missing values in target 'Price'. Impute or drop rows with missing target values.")
+                    logging.error("Missing values in regression target")
+                    st.stop()
+                if not np.isfinite(y).all():
+                    st.error("❌ Invalid values (e.g., infinite) in target 'Price'. Clean the target column.")
+                    logging.error("Infinite values in regression target")
+                    st.stop()
+            if X.isna().any().any() and missing_action != "Impute automatically":
+                st.error("❌ Missing values in features. Select 'Impute automatically' or drop rows/columns.")
+                logging.error("Missing values in features")
+                st.stop()
+            for col in num_cols:
+                if not np.isfinite(X[col]).all():
+                    st.error(f"❌ Invalid values (e.g., infinite) in numeric column '{col}'. Clean the data.")
+                    logging.error(f"Infinite values in numeric column: {col}")
+                    st.stop()
 
             # Preprocessing Pipeline
             preprocessor = ColumnTransformer([
@@ -243,43 +265,34 @@ if df is not None:
 
             # Neural Network
             if selected_model_name == "Neural Network" and tensorflow_available:
-                X_sample = X.iloc[:100]
-                preprocessor.fit(X_sample)
-                num_features = preprocessor.transform(X_sample).shape[1]
+                # Fit preprocessor to get feature count
+                try:
+                    X_sample = X.iloc[:min(100, len(X))]
+                    preprocessor.fit(X_sample)
+                    num_features = preprocessor.transform(X_sample).shape[1]
+                except Exception as e:
+                    st.error(f"❌ Preprocessing failed: {str(e)}. Check categorical columns for invalid data.")
+                    logging.error(f"Preprocessing failed: {str(e)}", exc_info=True)
+                    st.stop()
+                
                 hidden_layers = st.slider("Hidden Layers", 1, 3, 1, key="nn_layers")
                 nodes_per_layer = st.slider("Nodes per Layer", 8, 64, 32, 8, key="nn_nodes")
                 
-                def build_nn_classifier():
+                def build_nn_model():
                     model = Sequential()
                     model.add(Dense(nodes_per_layer, input_dim=num_features, activation="relu"))
                     for _ in range(hidden_layers - 1):
                         model.add(Dense(nodes_per_layer, activation="relu"))
-                    output_units = len(np.unique(y)) if task_type == "Classification" else 1
-                    output_activation = "softmax" if task_type == "Classification" and output_units > 2 else "sigmoid" if task_type == "Classification" else "linear"
-                    model.add(Dense(output_units, activation=output_activation))
-                    loss = "sparse_categorical_crossentropy" if task_type == "Classification" and output_units > 2 else "binary_crossentropy" if task_type == "Classification" else "mse"
-                    model.compile(loss=loss, optimizer="adam", metrics=["accuracy"] if task_type == "Classification" else ["mse"])
+                    model.add(Dense(1, activation="linear"))
+                    model.compile(loss="mse", optimizer="adam", metrics=["mse"])
                     return model
                 
-                model = KerasClassifier(model=build_nn_classifier, epochs=50, batch_size=32, verbose=0) if task_type == "Classification" else \
-                        KerasRegressor(model=build_nn_classifier, epochs=50, batch_size=32, verbose=0)
+                model = KerasRegressor(model=build_nn_model, epochs=50, batch_size=32, verbose=0) if task_type == "Regression" else \
+                        KerasClassifier(model=build_nn_model, epochs=50, batch_size=32, verbose=0)
                 if debug_mode:
                     logging.debug(f"Neural Network: input_dim={num_features}, layers={hidden_layers}, nodes={nodes_per_layer}")
             else:
                 model = model_options[task_type][selected_model_name]
-
-            # Hyperparameters
-            hyperparams = {}
-            if hasattr(model, "n_estimators"):
-                hyperparams["model__n_estimators"] = st.slider("Trees", 50, 200, 100, 10, key="n_estimators")
-            if hasattr(model, "max_depth"):
-                hyperparams["model__max_depth"] = st.slider("Max Depth", 5, 20, 10, 1, key="max_depth")
-            if selected_model_name == "SVM":
-                hyperparams["model__C"] = st.slider("SVM C", 0.1, 10.0, 1.0, 0.1, key="svm_c")
-            if selected_model_name == "KNN":
-                hyperparams["model__n_neighbors"] = st.slider("Neighbors", 3, 15, 5, key="knn_neighbors")
-            if debug_mode:
-                logging.debug(f"Hyperparameters: {hyperparams}")
 
             # Pipeline
             pipeline = Pipeline([
@@ -294,10 +307,9 @@ if df is not None:
             if st.button("🚀 Train Model"):
                 try:
                     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-                    pipeline.set_params(**hyperparams)
                     with st.spinner("Training Model..."):
                         scoring = "accuracy" if task_type == "Classification" else "neg_mean_squared_error"
-                        scores = cross_val_score(pipeline, X_train, y_train, cv=cv_folds, scoring=scoring)
+                        scores = cross_val_score(pipeline, X_train, y_train, cv=cv_folds, scoring=scoring, error_score='raise')
                         pipeline.fit(X_train, y_train)
 
                     # Save Model
@@ -417,7 +429,7 @@ if df is not None:
                         """, height=400)
 
                 except Exception as e:
-                    st.error(f"❌ Training Failed: {str(e)}. Check data for invalid values or try another model.")
+                    st.error(f"❌ Training Failed: {str(e)}. Check 'Price' for invalid values, ensure sufficient data, or try another model (e.g., Random Forest).")
                     logging.error(f"Training failed: {str(e)}", exc_info=True)
 
     # Live Prediction
