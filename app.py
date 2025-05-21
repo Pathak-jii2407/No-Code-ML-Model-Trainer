@@ -15,7 +15,7 @@ from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor, Grad
 from sklearn.linear_model import LogisticRegression, LinearRegression
 from sklearn.svm import SVC
 from sklearn.metrics import classification_report, mean_squared_error, r2_score, mean_absolute_error, confusion_matrix
-from xgboost import XGBClassifier, XGBRegressor
+from xgboost import XGBClassifier, XGBRegressor  # Ensure xgboost is installed
 
 # Configure logging
 logging.basicConfig(filename='automl_errors.log', level=logging.ERROR)
@@ -102,13 +102,13 @@ if df is not None:
                 "Logistic Regression": LogisticRegression(),
                 "Random Forest": RandomForestClassifier(n_estimators=100, random_state=42),
                 "SVM": SVC(probability=True),
-                "XGBoost": XGBClassifier(use_label_encoder=False, eval_metric='logloss')
+                "XGBoost": XGBClassifier(use_label_encoder=False, eval_metric='logloss')  # Remove this line if xgboost is not installed
             },
             "Regression": {
                 "Linear Regression": LinearRegression(),
                 "Random Forest": RandomForestRegressor(n_estimators=100, random_state=42),
                 "Gradient Boosting": GradientBoostingRegressor(),
-                "XGBoost": XGBRegressor()
+                "XGBoost": XGBRegressor()  # Remove this line if xgboost is not installed
             }
         }
         selected_model_name = st.selectbox("🛠 Select Model", list(model_options[task_type].keys()))
