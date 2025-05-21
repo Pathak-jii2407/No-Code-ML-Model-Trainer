@@ -90,15 +90,20 @@ with st.sidebar:
     st.subheader("📂 Dataset Selection")
     preloaded_files = [f for f in os.listdir(UPLOADS_FOLDER) if f.endswith((".csv", ".xlsx", ".json"))]
     selected_file = st.selectbox("Select a dataset", ["Upload your own"] + preloaded_files, key="dataset_select")
+    
+    # Define uploaded_file before dataset_key logic
+    uploaded_file = st.file_uploader("📂 Or Upload a File", type=["csv", "xlsx", "json"], key="file_uploader")
 
-# Load dataset
-df = None
-dataset_key = selected_file if selected_file != "Upload your own" else (uploaded_file.name if uploaded_file else None)
+# Set dataset_key for session state management
+# NOTE: uploaded_file is defined above to avoid NameError
+dataset_key = selected_file if selected_file != "Upload your own" else (uploaded_file.name if uploaded_file is not None else None)
 if dataset_key != st.session_state.dataset_key:
     st.session_state.dataset_key = dataset_key
     st.session_state.model_trained = False
     st.session_state.model_name = f"model_{dataset_key.split('.')[0]}" if dataset_key else "model"
 
+# Load dataset
+df = None
 if selected_file != "Upload your own":
     file_path = os.path.join(UPLOADS_FOLDER, selected_file)
     try:
@@ -115,8 +120,6 @@ if selected_file != "Upload your own":
         st.error(f"❌ Failed to load dataset: {str(e)}")
         logging.error(f"Dataset loading failed: {str(e)}")
 
-# Upload File
-uploaded_file = st.file_uploader("📂 Or Upload a File", type=["csv", "xlsx", "json"], key="file_uploader")
 if uploaded_file:
     try:
         if uploaded_file.name.endswith(".csv"):
