@@ -18,13 +18,28 @@ from sklearn.impute import SimpleImputer
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor, GradientBoostingRegressor
 from sklearn.linear_model import LogisticRegression, LinearRegression
 from sklearn.svm import SVC
+from sklearn.neighbors import KNeighborsClassifier, KNeighborsRegressor
 from sklearn.metrics import classification_report, mean_squared_error, r2_score, mean_absolute_error, confusion_matrix, roc_curve, auc
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import Dense
-from scikeras.wrappers import KerasClassifier, KerasRegressor
+
+# Optional TensorFlow import for neural networks
+try:
+    from tensorflow.keras.models import Sequential
+    from tensorflow.keras.layers import Dense
+    from scikeras.wrappers import KerasClassifier, KerasRegressor
+    tensorflow_available = True
+except ImportError:
+    Sequential = Dense = KerasClassifier = KerasRegressor = None
+    tensorflow_available = False
 
 # Configure logging
 logging.basicConfig(filename='automl_errors.log', level=logging.ERROR)
+
+# Streamlit Page Config (must be first Streamlit command)
+st.set_page_config(page_title="AutoML Pro", page_icon="🤖", layout="wide")
+
+# Display TensorFlow warning if not installed
+if not tensorflow_available:
+    st.warning("TensorFlow not installed. Neural Network models will be unavailable. Install with 'pip install tensorflow'.")
 
 # Custom CSS for better UI
 st.markdown("""
@@ -37,13 +52,12 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# Streamlit Page Config
-st.set_page_config(page_title="AutoML Pro", page_icon="🤖", layout="wide")
-st.title("🤖 AutoML Pro: No-Code Machine Learning")
-
 # Initialize session state
 if 'model_name' not in st.session_state:
     st.session_state.model_name = "model"
+
+# Title
+st.title("🤖 AutoML Pro: No-Code Machine Learning")
 
 # Folder path for pre-uploaded datasets
 UPLOADS_FOLDER = "Uploads"
@@ -137,20 +151,23 @@ if df is not None:
                     "Logistic Regression": LogisticRegression(),
                     "Random Forest": RandomForestClassifier(n_estimators=100, random_state=42),
                     "SVM": SVC(probability=True),
-                    "Neural Network": None  # Placeholder, configured below
+                    "KNN": KNeighborsClassifier()
                 },
                 "Regression": {
                     "Linear Regression": LinearRegression(),
                     "Random Forest": RandomForestRegressor(n_estimators=100, random_state=42),
                     "Gradient Boosting": GradientBoostingRegressor(),
-                    "Neural Network": None
+                    "KNN": KNeighborsRegressor()
                 }
             }
+            if tensorflow_available:
+                model_options["Classification"]["Neural Network"] = None
+                model_options["Regression"]["Neural Network"] = None
 
             selected_model_name = st.selectbox("🛠 Select Model", list(model_options[task_type].keys()), key="model_select")
             
             # Neural Network Configuration
-            if selected_model_name == "Neural Network":
+            if selected_model_name == "Neural Network" and tensorflow_available:
                 num_features = len([col for col in df.columns if col != target_column])
                 hidden_layers = st.slider("Number of Hidden Layers", 1, 5, 1, key="nn_layers")
                 nodes_per_layer = st.slider("Nodes per Hidden Layer", 8, 128, 32, 8, key="nn_nodes")
@@ -213,8 +230,12 @@ if df is not None:
             if selected_model_name == "SVM":
                 hyperparams["C"] = st.slider("SVM C Parameter", 0.1, 10.0, 1.0, 0.1, key="svm_c")
                 model.set_params(C=hyperparams["C"])
-            if selected_model_name == "Neural Network":
+            if selected_model_name == "KNN":
+                hyperparams["n_neighbors"] = st.slider("Number of Neighbors", 3, 15, 5, key="knn_neighbors")
+                model.set_params(n_neighbors=hyperparams["n_neighbors"])
+            if selected_model_name == "Neural Network" and tensorflow_available:
                 hyperparams["epochs"] = st.slider("Epochs", 10, 100, 50, 10, key="nn_epochs")
+                model.set_params(epochs=hyperparams["epochs"])
 
             # Training Pipeline
             pipeline = Pipeline([
@@ -236,18 +257,19 @@ if df is not None:
                     "Gradient Boosting": {"model__n_estimators": [50, 100, 200], "model__max_depth": [3, 5, 7]},
                     "SVM": {"model__C": [0.1, 1.0, 10.0]},
                     "Logistic Regression": {"model__C": [0.1, 1.0, 10.0]},
-                    "Linear Regression": {}
+                    "Linear Regression": {},
+                    "KNN": {"model__n_neighbors": [3, 5, 7]}
                 }.get(selected_model_name, {})
                 if param_grid:
-                    total_iterations = len(param_grid.get("model__n_estimators", [1])) * len(param_grid.get("model__max_depth", [1]))
+                    total_iterations = np.prod([len(v) for v in param_grid.values()])
                     iteration = 0
-                    for n_est in param_grid.get("model__n_estimators", [hyperparams.get("n_estimators", 100)]):
-                        for max_d in param_grid.get("model__max_depth", [hyperparams.get("max_depth", 10)]):
-                            model.set_params(n_estimators=n_est, max_depth=max_d) if "n_estimators" in param_grid else None
+                    for param_name, param_values in param_grid.items():
+                        for param_value in param_values:
+                            param_dict = {param_name: param_value}
+                            model.set_params(**param_dict)
                             scores = cross_val_score(pipeline, X, y, cv=cv_folds, error_score='raise')
                             tuning_results.append({
-                                "n_estimators": n_est,
-                                "max_depth": max_d,
+                                param_name.split('__')[-1]: param_value,
                                 "score": np.mean(scores)
                             })
                             iteration += 1
@@ -256,14 +278,14 @@ if df is not None:
                     st.write("### Tuning Results")
                     st.dataframe(tuning_df)
                     # Plot tuning results
-                    if "n_estimators" in param_grid:
+                    if tuning_results:
                         chart_data = {
                             "type": "line",
                             "data": {
                                 "datasets": [
                                     {
                                         "label": "Cross-Validation Score",
-                                        "data": [{"x": row["n_estimators"], "y": row["score"]} for row in tuning_results],
+                                        "data": [{"x": row[list(row.keys())[0]], "y": row["score"]} for row in tuning_results],
                                         "fill": False,
                                         "borderColor": "rgba(75, 192, 192, 1)",
                                         "borderWidth": 2
@@ -272,7 +294,7 @@ if df is not None:
                             },
                             "options": {
                                 "scales": {
-                                    "x": {"title": {"display": True, "text": "Number of Trees"}},
+                                    "x": {"title": {"display": True, "text": list(tuning_results[0].keys())[0]}},
                                     "y": {"title": {"display": True, "text": "Cross-Validation Score"}}
                                 },
                                 "plugins": {"title": {"display": True, "text": "Hyperparameter Tuning Results"}}
@@ -437,8 +459,8 @@ if df is not None:
                     progress_bar = st.progress(0)
                     comparison_results = []
                     for idx, (name, model) in enumerate(model_options[task_type].items()):
-                        if name == "Neural Network":
-                            continue  # Skip neural network for comparison due to complexity
+                        if name == "Neural Network" and not tensorflow_available:
+                            continue
                         pipeline = Pipeline([('preprocess', preprocessor), ('model', model)])
                         scores = cross_val_score(pipeline, X, y, cv=cv_folds, error_score='raise')
                         comparison_results.append({"Model": name, "Mean CV Score": np.mean(scores), "Std CV Score": np.std(scores)})
