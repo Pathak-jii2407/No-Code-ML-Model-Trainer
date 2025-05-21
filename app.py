@@ -1,4 +1,3 @@
-
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -211,10 +210,11 @@ if df is not None:
                     model.add(Dense(nodes_per_layer, input_dim=num_features, activation=activation))
                     for _ in range(hidden_layers - 1):
                         model.add(Dense(nodes_per_layer, activation=activation))
-                    model.add(Dense(1 if task_type == "Regression" else len(np.unique(df[target_column])), 
-                                   activation="sigmoid" if task_type == "Classification" else "linear"))
-                    model.compile(loss="binary_crossentropy" if task_type == "Classification" else "mse", 
-                                  optimizer="adam", metrics=["accuracy"] if task_type == "Classification" else ["mse"])
+                    output_units = len(np.unique(df[target_column])) if task_type == "Classification" else 1
+                    output_activation = "softmax" if task_type == "Classification" and output_units > 2 else "sigmoid" if task_type == "Classification" else "linear"
+                    model.add(Dense(output_units, activation=output_activation))
+                    loss = "sparse_categorical_crossentropy" if task_type == "Classification" and output_units > 2 else "binary_crossentropy" if task_type == "Classification" else "mse"
+                    model.compile(loss=loss, optimizer="adam", metrics=["accuracy"] if task_type == "Classification" else ["mse"])
                     return model
                 
                 model = KerasClassifier(model=build_nn_classifier, epochs=50, batch_size=32, verbose=0) if task_type == "Classification" else \
@@ -306,10 +306,10 @@ if df is not None:
                         for idx, params in enumerate(param_combinations):
                             param_dict = {f"model__{k.split('__')[-1]}": v for k, v in zip(param_grid.keys(), params)}
                             model.set_params(**param_dict)
-                            scores = cross_val_score(pipeline, X, y, cv=cv_folds, error_score='raise')
+                            scores = cross_val_score(pipeline, X, y, cv=cv_folds, scoring="accuracy" if task_type == "Classification" else "neg_mean_squared_error")
                             tuning_results.append({
                                 **{k.split('__')[-1]: v for k, v in param_dict.items()},
-                                "score": float(np.mean(scores))  # Ensure JSON-serializable
+                                "score": float(np.mean(scores))
                             })
                             progress_bar.progress((idx + 1) / total_iterations)
                         tuning_df = pd.DataFrame(tuning_results)
@@ -351,8 +351,8 @@ if df is not None:
                         if debug_mode:
                             logging.debug(f"Tuning results: {tuning_results}")
                     except Exception as e:
-                        st.error(f"❌ Hyperparameter tuning failed: {str(e)}")
-                        logging.error(f"Tuning failed: {str(e)}")
+                        st.error(f"❌ Hyperparameter tuning failed: {str(e)}. Try a different model or adjust parameters.")
+                        logging.error(f"Tuning failed: {str(e)}", exc_info=True)
                 else:
                     st.info("No tunable hyperparameters for this model.")
 
@@ -371,11 +371,17 @@ if df is not None:
                         st.error("❌ Non-numeric features detected without categorical encoding. Please encode categorical columns.")
                         logging.error("Non-numeric features detected")
                         st.stop()
+                    if selected_model_name == "Neural Network" and tensorflow_available:
+                        if task_type == "Classification" and not np.all(y.dtypes.apply(lambda x: np.issubdtype(x, np.integer))):
+                            st.error("❌ Neural network classification requires integer-encoded target labels.")
+                            logging.error("Invalid target labels for neural network classification")
+                            st.stop()
 
                     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
                     with st.spinner("Training Model..."):
                         progress_bar = st.progress(0)
-                        scores = cross_val_score(pipeline, X_train, y_train, cv=cv_folds, error_score='raise')
+                        scoring = "accuracy" if task_type == "Classification" else "neg_mean_squared_error"
+                        scores = cross_val_score(pipeline, X_train, y_train, cv=cv_folds, scoring=scoring)
                         pipeline.fit(X_train, y_train)
                         progress_bar.progress(100)
 
@@ -386,11 +392,8 @@ if df is not None:
                     # Create ZIP archive for downloads
                     zip_buffer = io.BytesIO()
                     with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
-                        # Save model
                         with open(f"{st.session_state.model_name}.pkl", "rb") as f:
                             zip_file.writestr(f"{st.session_state.model_name}.pkl", f.read())
-                        
-                        # Save metrics
                         y_pred = pipeline.predict(X_test)
                         metrics = {}
                         if task_type == "Classification":
@@ -422,7 +425,6 @@ if df is not None:
                         st.text(classification_report(y_test, y_pred))
                         st.write("### Confusion Matrix")
                         st.write(cm)
-                        # ROC Curve
                         if hasattr(pipeline.named_steps['model'], 'predict_proba'):
                             y_prob = pipeline.predict_proba(X_test)[:, 1] if len(np.unique(y_test)) == 2 else None
                             if y_prob is not None:
@@ -460,7 +462,6 @@ if df is not None:
                                         </script>
                                     </div>
                                 """, height=400)
-                        # Feature Importance
                         if selected_model_name == "Random Forest":
                             feature_importance = pipeline.named_steps['model'].feature_importances_
                             feature_names = num_cols.tolist() + list(pipeline.named_steps['preprocess'].named_transformers_['cat'].named_steps['encoder'].get_feature_names_out(cat_cols))
@@ -471,7 +472,6 @@ if df is not None:
                         st.write(f"📉 **RMSE:** {np.sqrt(mean_squared_error(y_test, y_pred)):.2f}")
                         st.write(f"📊 **R² Score:** {r2_score(y_test, y_pred):.2f}")
                         st.write(f"📈 **MAE:** {mean_absolute_error(y_test, y_pred):.2f}")
-                        # Predicted vs Actual Plot
                         st.write("### Predicted vs Actual Plot")
                         chart_data = {
                             "type": "scatter",
@@ -506,7 +506,7 @@ if df is not None:
                         """, height=400)
 
                 except Exception as e:
-                    st.error(f"❌ Training Failed: Please check your data (e.g., non-numeric values, missing data) or try a different model. Error: {str(e)}")
+                    st.error(f"❌ Training Failed: {str(e)}. Try a different model (e.g., Random Forest) or check data for non-numeric values or missing data.")
                     logging.error(f"Training failed: {str(e)}", exc_info=True)
 
             # Model Comparison
@@ -520,7 +520,8 @@ if df is not None:
                             if name == "Neural Network" and not tensorflow_available:
                                 continue
                             pipeline = Pipeline([('preprocess', preprocessor), ('model', model)])
-                            scores = cross_val_score(pipeline, X, y, cv=cv_folds, error_score='raise')
+                            scoring = "accuracy" if task_type == "Classification" else "neg_mean_squared_error"
+                            scores = cross_val_score(pipeline, X, y, cv=cv_folds, scoring=scoring)
                             comparison_results.append({"Model": name, "Mean CV Score": float(np.mean(scores)), "Std CV Score": float(np.std(scores))})
                             progress_bar.progress((idx + 1) / len(model_options[task_type]))
                         comparison_df = pd.DataFrame(comparison_results)
@@ -529,8 +530,8 @@ if df is not None:
                         if debug_mode:
                             logging.debug(f"Model comparison results: {comparison_results}")
                     except Exception as e:
-                        st.error(f"❌ Model comparison failed: {str(e)}")
-                        logging.error(f"Model comparison failed: {str(e)}")
+                        st.error(f"❌ Model comparison failed: {str(e)}. Try cleaning the dataset or using fewer models.")
+                        logging.error(f"Model comparison failed: {str(e)}", exc_info=True)
 
     # Live Prediction
     with st.sidebar:
@@ -560,4 +561,4 @@ if df is not None:
                         logging.debug(f"Prediction made: {prediction}, input: {input_data}")
                 except Exception as e:
                     st.error(f"❌ Prediction Failed: Ensure all inputs are valid (e.g., correct data types). Error: {str(e)}")
-                    logging.error(f"Prediction failed: {str(e)}")
+                    logging.error(f"Prediction failed: {str(e)}", exc_info=True)
