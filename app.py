@@ -1,3 +1,4 @@
+
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -8,8 +9,14 @@ import json
 import base64
 import zipfile
 import io
-from ydata_profiling import ProfileReport
-from streamlit_pandas_profiling import st_profile_report
+import itertools
+try:
+    from ydata_profiling import ProfileReport
+    from streamlit_pandas_profiling import st_profile_report
+    profiling_available = True
+except ImportError:
+    ProfileReport = st_profile_report = None
+    profiling_available = False
 from sklearn.model_selection import train_test_split, cross_val_score
 from sklearn.preprocessing import StandardScaler, MinMaxScaler, OneHotEncoder
 from sklearn.compose import ColumnTransformer
@@ -32,14 +39,17 @@ except ImportError:
     tensorflow_available = False
 
 # Configure logging
-logging.basicConfig(filename='automl_errors.log', level=logging.ERROR)
+logging.basicConfig(filename='automl_errors.log', level=logging.DEBUG, 
+                    format='%(asctime)s - %(levelname)s - %(message)s')
 
 # Streamlit Page Config (must be first Streamlit command)
 st.set_page_config(page_title="AutoML Pro", page_icon="🤖", layout="wide")
 
-# Display TensorFlow warning if not installed
+# Display warnings for missing optional dependencies
 if not tensorflow_available:
     st.warning("TensorFlow not installed. Neural Network models will be unavailable. Install with 'pip install tensorflow'.")
+if not profiling_available:
+    st.warning("ydata-profiling not installed. Dataset reports will be unavailable. Install with 'pip install ydata-profiling streamlit-pandas-profiling'.")
 
 # Custom CSS for better UI
 st.markdown("""
@@ -58,6 +68,9 @@ if 'model_name' not in st.session_state:
 
 # Title
 st.title("🤖 AutoML Pro: No-Code Machine Learning")
+
+# Debug mode toggle
+debug_mode = st.checkbox("Enable Debug Mode (logs detailed info)", value=False)
 
 # Folder path for pre-uploaded datasets
 UPLOADS_FOLDER = "Uploads"
@@ -84,6 +97,8 @@ if selected_file != "Upload your own":
         elif selected_file.endswith(".json"):
             df = pd.read_json(file_path)
         st.success(f"✅ Loaded `{selected_file}` from preloaded datasets!")
+        if debug_mode:
+            logging.debug(f"Loaded dataset: {selected_file}, shape: {df.shape}")
     except Exception as e:
         st.error(f"❌ Failed to load dataset: {str(e)}")
         logging.error(f"Dataset loading failed: {str(e)}")
@@ -99,6 +114,8 @@ if uploaded_file:
         elif uploaded_file.name.endswith(".json"):
             df = pd.read_json(uploaded_file)
         st.success("✅ File uploaded successfully!")
+        if debug_mode:
+            logging.debug(f"Uploaded dataset: {uploaded_file.name}, shape: {df.shape}")
     except Exception as e:
         st.error(f"❌ Failed to upload file: {str(e)}")
         logging.error(f"File upload failed: {str(e)}")
@@ -107,6 +124,7 @@ if uploaded_file:
 if df is not None:
     if df.empty or len(df.columns) == 0:
         st.error("❌ Dataset is empty or invalid!")
+        logging.error("Empty or invalid dataset")
         st.stop()
 
     # Dataset Sampling
@@ -116,6 +134,8 @@ if df is not None:
             sample_size = st.slider("Sample Size", 100, len(df), min(1000, len(df)))
             df = df.sample(n=sample_size, random_state=42)
             st.success(f"Dataset sampled to {sample_size} rows.")
+            if debug_mode:
+                logging.debug(f"Sampled dataset to {sample_size} rows")
 
         st.write("### Dataset Preview")
         st.dataframe(df.head())
@@ -126,15 +146,26 @@ if df is not None:
         if columns_to_drop:
             df = df.drop(columns=columns_to_drop)
             st.success("Selected columns dropped!")
+            if debug_mode:
+                logging.debug(f"Dropped columns: {columns_to_drop}")
 
     # Generate Report
-    generate_report = st.checkbox("Generate Dataset Report", value=False)
-    if generate_report and st.button("🚀 Generate Report"):
-        with st.spinner("Generating Report... Please Wait ⏳"):
-            progress_bar = st.progress(0)
-            profile = ProfileReport(df, explorative=True)
-            progress_bar.progress(100)
-            st_profile_report(profile)
+    if profiling_available:
+        generate_report = st.checkbox("Generate Dataset Report", value=False)
+        if generate_report and st.button("🚀 Generate Report"):
+            with st.spinner("Generating Report... Please Wait ⏳"):
+                try:
+                    progress_bar = st.progress(0)
+                    profile = ProfileReport(df, explorative=True)
+                    progress_bar.progress(100)
+                    st_profile_report(profile)
+                    if debug_mode:
+                        logging.debug("Generated dataset report")
+                except Exception as e:
+                    st.error(f"❌ Failed to generate report: {str(e)}")
+                    logging.error(f"Report generation failed: {str(e)}")
+    else:
+        st.info("Dataset report generation is disabled due to missing dependencies.")
 
     # Model Configuration
     with st.expander("🛠 Model Configuration", expanded=True):
@@ -144,6 +175,8 @@ if df is not None:
             unique_values = df[target_column].nunique()
             task_type = "Classification" if unique_values < 10 else "Regression"
             st.write(f"**Task Type: {task_type}**")
+            if debug_mode:
+                logging.debug(f"Task type: {task_type}, target: {target_column}, unique values: {unique_values}")
 
             # Model Selection
             model_options = {
@@ -186,6 +219,8 @@ if df is not None:
                 
                 model = KerasClassifier(model=build_nn_classifier, epochs=50, batch_size=32, verbose=0) if task_type == "Classification" else \
                         KerasRegressor(model=build_nn_classifier, epochs=50, batch_size=32, verbose=0)
+                if debug_mode:
+                    logging.debug(f"Neural Network configured: layers={hidden_layers}, nodes={nodes_per_layer}, activation={activation}")
             else:
                 model = model_options[task_type][selected_model_name]
 
@@ -198,6 +233,8 @@ if df is not None:
             num_cols = X.select_dtypes(include=['int64', 'float64']).columns
             cat_cols = X.select_dtypes(include=['object']).columns
             st.write(f"📌 **Categorical Columns (One-Hot Encoded):** {cat_cols}")
+            if debug_mode:
+                logging.debug(f"Features: numeric={num_cols.tolist()}, categorical={cat_cols.tolist()}")
 
             # Imputation and Scaling
             imputation_strategy = st.selectbox("Select Imputation Strategy for Numeric Columns", 
@@ -219,7 +256,7 @@ if df is not None:
                 ]), cat_cols)
             ])
 
-            # Hyperparameter Tuning
+            # Hyperparameter Tuning Options
             hyperparams = {}
             if hasattr(model, "n_estimators"):
                 hyperparams["n_estimators"] = st.slider("🌳 Number of Trees (n_estimators)", 10, 500, 100, 10, key="n_estimators")
@@ -236,6 +273,8 @@ if df is not None:
             if selected_model_name == "Neural Network" and tensorflow_available:
                 hyperparams["epochs"] = st.slider("Epochs", 10, 100, 50, 10, key="nn_epochs")
                 model.set_params(epochs=hyperparams["epochs"])
+            if debug_mode:
+                logging.debug(f"Hyperparameters: {hyperparams}")
 
             # Training Pipeline
             pipeline = Pipeline([
@@ -249,7 +288,7 @@ if df is not None:
             # Auto Hyperparameter Tuning
             auto_tune = st.checkbox("Enable Auto Hyperparameter Tuning", value=False)
             tuning_results = []
-            if auto_tune and selected_model_name != "Neural Network":  # Neural network tuning is complex, handled separately
+            if auto_tune and selected_model_name != "Neural Network":
                 st.write("### Auto Hyperparameter Tuning")
                 progress_bar = st.progress(0)
                 param_grid = {
@@ -261,63 +300,79 @@ if df is not None:
                     "KNN": {"model__n_neighbors": [3, 5, 7]}
                 }.get(selected_model_name, {})
                 if param_grid:
-                    total_iterations = np.prod([len(v) for v in param_grid.values()])
-                    iteration = 0
-                    for param_name, param_values in param_grid.items():
-                        for param_value in param_values:
-                            param_dict = {param_name: param_value}
+                    try:
+                        param_combinations = list(itertools.product(*[param_grid[p] for p in param_grid]))
+                        total_iterations = len(param_combinations)
+                        for idx, params in enumerate(param_combinations):
+                            param_dict = {f"model__{k.split('__')[-1]}": v for k, v in zip(param_grid.keys(), params)}
                             model.set_params(**param_dict)
                             scores = cross_val_score(pipeline, X, y, cv=cv_folds, error_score='raise')
                             tuning_results.append({
-                                param_name.split('__')[-1]: param_value,
-                                "score": np.mean(scores)
+                                **{k.split('__')[-1]: v for k, v in param_dict.items()},
+                                "score": float(np.mean(scores))  # Ensure JSON-serializable
                             })
-                            iteration += 1
-                            progress_bar.progress(iteration / total_iterations)
-                    tuning_df = pd.DataFrame(tuning_results)
-                    st.write("### Tuning Results")
-                    st.dataframe(tuning_df)
-                    # Plot tuning results
-                    if tuning_results:
-                        chart_data = {
-                            "type": "line",
-                            "data": {
-                                "datasets": [
-                                    {
-                                        "label": "Cross-Validation Score",
-                                        "data": [{"x": row[list(row.keys())[0]], "y": row["score"]} for row in tuning_results],
-                                        "fill": False,
-                                        "borderColor": "rgba(75, 192, 192, 1)",
-                                        "borderWidth": 2
-                                    }
-                                ]
-                            },
-                            "options": {
-                                "scales": {
-                                    "x": {"title": {"display": True, "text": list(tuning_results[0].keys())[0]}},
-                                    "y": {"title": {"display": True, "text": "Cross-Validation Score"}}
+                            progress_bar.progress((idx + 1) / total_iterations)
+                        tuning_df = pd.DataFrame(tuning_results)
+                        st.write("### Tuning Results")
+                        st.dataframe(tuning_df)
+                        # Plot tuning results (single parameter for simplicity)
+                        if tuning_results and "n_estimators" in tuning_results[0]:
+                            chart_data = {
+                                "type": "line",
+                                "data": {
+                                    "datasets": [
+                                        {
+                                            "label": "Cross-Validation Score",
+                                            "data": [{"x": float(row["n_estimators"]), "y": float(row["score"])} for row in tuning_results],
+                                            "fill": False,
+                                            "borderColor": "rgba(75, 192, 192, 1)",
+                                            "borderWidth": 2
+                                        }
+                                    ]
                                 },
-                                "plugins": {"title": {"display": True, "text": "Hyperparameter Tuning Results"}}
+                                "options": {
+                                    "scales": {
+                                        "x": {"title": {"display": True, "text": "Number of Trees"}},
+                                        "y": {"title": {"display": True, "text": "Cross-Validation Score"}}
+                                    },
+                                    "plugins": {"title": {"display": True, "text": "Hyperparameter Tuning Results"}}
+                                }
                             }
-                        }
-                        st.components.v1.html(f"""
-                            <div style='width: 100%; height: 400px;'>
-                                <canvas id='tuning_chart'></canvas>
-                                <script src='https://cdn.jsdelivr.net/npm/chart.js'></script>
-                                <script>
-                                    const ctx = document.getElementById('tuning_chart').getContext('2d');
-                                    new Chart(ctx, {json.dumps(chart_data)});
-                                </script>
-                            </div>
-                        """, height=400)
+                            st.components.v1.html(f"""
+                                <div style='width: 100%; height: 400px;'>
+                                    <canvas id='tuning_chart'></canvas>
+                                    <script src='https://cdn.jsdelivr.net/npm/chart.js'></script>
+                                    <script>
+                                        const ctx = document.getElementById('tuning_chart').getContext('2d');
+                                        new Chart(ctx, {json.dumps(chart_data)});
+                                    </script>
+                                </div>
+                            """, height=400)
+                        if debug_mode:
+                            logging.debug(f"Tuning results: {tuning_results}")
+                    except Exception as e:
+                        st.error(f"❌ Hyperparameter tuning failed: {str(e)}")
+                        logging.error(f"Tuning failed: {str(e)}")
+                else:
+                    st.info("No tunable hyperparameters for this model.")
 
             # Training Mode
             train_option = st.radio("🛠 Choose Training Mode", ["Manual Train", "Auto Train"], key="train_mode")
 
             # Train Model
             if train_option == "Auto Train" or st.button("🚀 Train Model"):
-                X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
                 try:
+                    # Validate data
+                    if X.isna().any().any() or y.isna().any():
+                        st.error("❌ Data contains missing values. Please use imputation or clean the dataset.")
+                        logging.error("Missing values detected in data")
+                        st.stop()
+                    if not np.all(X.dtypes.apply(lambda x: np.issubdtype(x, np.number))) and not cat_cols.any():
+                        st.error("❌ Non-numeric features detected without categorical encoding. Please encode categorical columns.")
+                        logging.error("Non-numeric features detected")
+                        st.stop()
+
+                    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
                     with st.spinner("Training Model..."):
                         progress_bar = st.progress(0)
                         scores = cross_val_score(pipeline, X_train, y_train, cv=cv_folds, error_score='raise')
@@ -343,9 +398,9 @@ if df is not None:
                             cm = confusion_matrix(y_test, y_pred)
                             metrics["confusion_matrix"] = cm.tolist()
                         else:
-                            metrics["rmse"] = np.sqrt(mean_squared_error(y_test, y_pred))
-                            metrics["r2_score"] = r2_score(y_test, y_pred)
-                            metrics["mae"] = mean_absolute_error(y_test, y_pred)
+                            metrics["rmse"] = float(np.sqrt(mean_squared_error(y_test, y_pred)))
+                            metrics["r2_score"] = float(r2_score(y_test, y_pred))
+                            metrics["mae"] = float(mean_absolute_error(y_test, y_pred))
                         with io.StringIO() as f:
                             json.dump(metrics, f)
                             zip_file.writestr("metrics.json", f.getvalue())
@@ -358,6 +413,8 @@ if df is not None:
                     st.success(f"✅ Model Trained Successfully!")
                     st.write(f"📊 **Model Used:** {selected_model_name}")
                     st.write(f"🎯 **Cross-Validation Score (Mean):** {np.mean(scores):.2f} (±{np.std(scores):.2f})")
+                    if debug_mode:
+                        logging.debug(f"Model trained: {selected_model_name}, CV score: {np.mean(scores):.2f}")
 
                     # Model Evaluation
                     if task_type == "Classification":
@@ -378,7 +435,7 @@ if df is not None:
                                         "datasets": [
                                             {
                                                 "label": f"ROC Curve (AUC = {roc_auc:.2f})",
-                                                "data": [{"x": f, "y": t} for f, t in zip(fpr, tpr)],
+                                                "data": [{"x": float(f), "y": float(t)} for f, t in zip(fpr, tpr)],
                                                 "fill": False,
                                                 "borderColor": "rgba(255, 99, 132, 1)",
                                                 "borderWidth": 2
@@ -449,25 +506,31 @@ if df is not None:
                         """, height=400)
 
                 except Exception as e:
-                    st.error(f"❌ Training Failed: Please check your data or try a different model. Error: {str(e)}")
-                    logging.error(f"Training failed: {str(e)}")
+                    st.error(f"❌ Training Failed: Please check your data (e.g., non-numeric values, missing data) or try a different model. Error: {str(e)}")
+                    logging.error(f"Training failed: {str(e)}", exc_info=True)
 
             # Model Comparison
             compare_models = st.checkbox("Compare Multiple Models", value=False)
             if compare_models and st.button("Compare Models"):
                 with st.spinner("Comparing Models..."):
-                    progress_bar = st.progress(0)
-                    comparison_results = []
-                    for idx, (name, model) in enumerate(model_options[task_type].items()):
-                        if name == "Neural Network" and not tensorflow_available:
-                            continue
-                        pipeline = Pipeline([('preprocess', preprocessor), ('model', model)])
-                        scores = cross_val_score(pipeline, X, y, cv=cv_folds, error_score='raise')
-                        comparison_results.append({"Model": name, "Mean CV Score": np.mean(scores), "Std CV Score": np.std(scores)})
-                        progress_bar.progress((idx + 1) / len(model_options[task_type]))
-                    comparison_df = pd.DataFrame(comparison_results)
-                    st.write("### Model Comparison")
-                    st.dataframe(comparison_df)
+                    try:
+                        progress_bar = st.progress(0)
+                        comparison_results = []
+                        for idx, (name, model) in enumerate(model_options[task_type].items()):
+                            if name == "Neural Network" and not tensorflow_available:
+                                continue
+                            pipeline = Pipeline([('preprocess', preprocessor), ('model', model)])
+                            scores = cross_val_score(pipeline, X, y, cv=cv_folds, error_score='raise')
+                            comparison_results.append({"Model": name, "Mean CV Score": float(np.mean(scores)), "Std CV Score": float(np.std(scores))})
+                            progress_bar.progress((idx + 1) / len(model_options[task_type]))
+                        comparison_df = pd.DataFrame(comparison_results)
+                        st.write("### Model Comparison")
+                        st.dataframe(comparison_df)
+                        if debug_mode:
+                            logging.debug(f"Model comparison results: {comparison_results}")
+                    except Exception as e:
+                        st.error(f"❌ Model comparison failed: {str(e)}")
+                        logging.error(f"Model comparison failed: {str(e)}")
 
     # Live Prediction
     with st.sidebar:
@@ -489,10 +552,12 @@ if df is not None:
                         logging.error(f"Invalid slider range for {col}: min={min_val}, max={max_val}")
             
             if st.button("Predict"):
-                df_input = pd.DataFrame([input_data])
                 try:
+                    df_input = pd.DataFrame([input_data])
                     prediction = model.predict(df_input)[0]
                     st.write(f"**Prediction: {prediction}**")
+                    if debug_mode:
+                        logging.debug(f"Prediction made: {prediction}, input: {input_data}")
                 except Exception as e:
-                    st.error(f"❌ Prediction Failed: Ensure all inputs are valid. Error: {str(e)}")
+                    st.error(f"❌ Prediction Failed: Ensure all inputs are valid (e.g., correct data types). Error: {str(e)}")
                     logging.error(f"Prediction failed: {str(e)}")
