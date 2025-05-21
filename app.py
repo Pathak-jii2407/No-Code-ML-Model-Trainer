@@ -226,5 +226,4 @@ if df is not None:
                             "plugins": {"title": {"display": True, "text": "Predicted vs Actual"}}
                         }
                     }
-                    ```chartjs
-                    chart_data
+
