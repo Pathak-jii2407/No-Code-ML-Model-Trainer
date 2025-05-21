@@ -177,7 +177,8 @@ if df is not None:
                 # Save Model with Custom Name
                 model_name = st.text_input("Enter Model Name for Saving", "model")
                 joblib.dump(pipeline, f"{model_name}.pkl")
-                st.download_button("Download Model", data=open(f"{model_name}.pkl", "rb"), file_name=f"{model_name}.pkl")
+                with open(f"{model_name}.pkl", "rb") as f:
+                    st.download_button("Download Model", data=f, file_name=f"{model_name}.pkl")
 
                 st.success(f"✅ Model Trained Successfully!")
                 st.write(f"📊 **Model Used:** {selected_model_name}")
@@ -211,7 +212,7 @@ if df is not None:
                             "datasets": [
                                 {
                                     "label": "Predicted vs Actual",
-                                    "data": [{"x": actual, "y": pred} for actual, pred in zip(y_test, y_pred)],
+                                    "data": [{"x": float(actual), "y": float(pred)} for actual, pred in zip(y_test, y_pred)],
                                     "backgroundColor": "rgba(75, 192, 192, 0.6)",
                                     "borderColor": "rgba(75, 192, 192, 1)",
                                     "borderWidth": 1
@@ -226,4 +227,41 @@ if df is not None:
                             "plugins": {"title": {"display": True, "text": "Predicted vs Actual"}}
                         }
                     }
+                    st.write("### Scatter Plot of Predicted vs Actual Values")
+                    st.components.v1.html(f"""
+                        <div style='width: 100%; height: 400px;'>
+                            <canvas id='chart'></canvas>
+                            <script src='https://cdn.jsdelivr.net/npm/chart.js'></script>
+                            <script>
+                                const ctx = document.getElementById('chart').getContext('2d');
+                                new Chart(ctx, {JSON.stringify(chart_data)});
+                            </script>
+                        </div>
+                    """, height=400)
 
+            except Exception as e:
+                st.error(f"❌ Training Failed: Please check your data or try a different model. Error: {str(e)}")
+                logging.error(f"Training failed: {str(e)}")
+
+        # Live Prediction
+        if os.path.exists(f"{model_name}.pkl"):
+            st.sidebar.header("🔮 Live Prediction")
+            st.sidebar.write("Fill in values to make a prediction:")
+            model = joblib.load(f"{model_name}.pkl")
+            input_data = {}
+            for col in feature_columns:
+                if col in cat_cols:
+                    unique_vals = df[col].dropna().unique()
+                    input_data[col] = st.sidebar.selectbox(f"Select value for {col}", unique_vals)
+                else:
+                    min_val, max_val = float(df[col].min()), float(df[col].max())
+                    input_data[col] = st.sidebar.slider(f"Enter value for {col}", min_val, max_val, float(df[col].mean()))
+            
+            if st.sidebar.button("Predict"):
+                df_input = pd.DataFrame([input_data])
+                try:
+                    prediction = model.predict(df_input)[0]
+                    st.sidebar.write(f"**Prediction: {prediction}**")
+                except Exception as e:
+                    st.sidebar.error(f"❌ Prediction Failed: {str(e)}")
+                    logging.error(f"Prediction failed: {str(e)}")
