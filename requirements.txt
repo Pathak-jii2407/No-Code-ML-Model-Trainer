@@ -62,7 +62,7 @@ streamlit-pandas-profiling==0.1.3
 streamlit-ydata-profiling==0.2.1
 tangled-up-in-unicode==0.2.0
 tenacity==9.0.0
-tensorflow==2.15.0
+tensorflow
 threadpoolctl==3.5.0
 toml==0.10.2
 tornado==6.4.2
