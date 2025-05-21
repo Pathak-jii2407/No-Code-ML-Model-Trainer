@@ -1,3 +1,4 @@
+
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -224,13 +225,17 @@ if df is not None:
                 logging.debug(f"Features: numeric={num_cols.tolist()}, categorical={cat_cols.tolist()}")
 
             # Data Validation
-            if task_type == "Classification" and not np.all(y.dtypes.apply(lambda x: np.issubdtype(x, np.number))):
+            if not isinstance(y, pd.Series):
+                st.error("❌ Target variable must be a single column. Select a valid target column.")
+                logging.error("Target variable is not a pandas Series")
+                st.stop()
+            if task_type == "Classification" and not np.issubdtype(y.dtype, np.number):
                 st.error("❌ Classification requires numeric target labels (e.g., 0, 1). Encode the target column.")
                 logging.error("Non-numeric target labels for classification")
                 st.stop()
             if task_type == "Regression":
-                if not np.all(y.dtypes.apply(lambda x: np.issubdtype(x, np.number))):
-                    st.error("❌ Regression target must be numeric. Check for non-numeric values in 'Price'.")
+                if not np.issubdtype(y.dtype, np.number):
+                    st.error("❌ Regression target 'Price' must be numeric. Check for non-numeric values.")
                     logging.error("Non-numeric values in regression target")
                     st.stop()
                 if y.isna().any():
@@ -265,7 +270,6 @@ if df is not None:
 
             # Neural Network
             if selected_model_name == "Neural Network" and tensorflow_available:
-                # Fit preprocessor to get feature count
                 try:
                     X_sample = X.iloc[:min(100, len(X))]
                     preprocessor.fit(X_sample)
@@ -283,8 +287,10 @@ if df is not None:
                     model.add(Dense(nodes_per_layer, input_dim=num_features, activation="relu"))
                     for _ in range(hidden_layers - 1):
                         model.add(Dense(nodes_per_layer, activation="relu"))
-                    model.add(Dense(1, activation="linear"))
-                    model.compile(loss="mse", optimizer="adam", metrics=["mse"])
+                    model.add(Dense(1 if task_type == "Regression" else len(np.unique(y)), 
+                                   activation="linear" if task_type == "Regression" else "softmax"))
+                    model.compile(loss="mse" if task_type == "Regression" else "sparse_categorical_crossentropy",
+                                 optimizer="adam", metrics=["mse" if task_type == "Regression" else "accuracy"])
                     return model
                 
                 model = KerasRegressor(model=build_nn_model, epochs=50, batch_size=32, verbose=0) if task_type == "Regression" else \
@@ -340,7 +346,7 @@ if df is not None:
                     href = f'<a href="data:application/zip;base64,{b64}" download="{st.session_state.model_name}_outputs.zip">Download Model + Metrics</a>'
                     st.markdown(href, unsafe_allow_html=True)
 
-                    st.success(f"✅ Model Trained Successfully!")
+                    st.write(f"✅ Model Trained Successfully!")
                     st.write(f"📊 **Model:** {selected_model_name}")
                     st.write(f"🎯 **CV Score (Mean):** {np.mean(scores):.2f} (±{np.std(scores):.2f})")
                     if debug_mode:
