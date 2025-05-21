@@ -1,4 +1,4 @@
-
+```python
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -61,6 +61,19 @@ st.markdown("""
 # Session state
 if 'model_name' not in st.session_state:
     st.session_state.model_name = "model"
+if 'dataset_key' not in st.session_state:
+    st.session_state.dataset_key = None
+if 'model_trained' not in st.session_state:
+    st.session_state.model_trained = False
+
+# Clear old model files on startup
+MODEL_DIR = "models"
+if not os.path.exists(MODEL_DIR):
+    os.makedirs(MODEL_DIR)
+for file in os.listdir(MODEL_DIR):
+    if file.endswith(".pkl"):
+        os.remove(os.path.join(MODEL_DIR, file))
+        logging.debug(f"Cleared old model file: {file}")
 
 # Title
 st.title("🤖 AutoML Pro: No-Code Machine Learning")
@@ -81,6 +94,12 @@ with st.sidebar:
 
 # Load dataset
 df = None
+dataset_key = selected_file if selected_file != "Upload your own" else (uploaded_file.name if uploaded_file else None)
+if dataset_key != st.session_state.dataset_key:
+    st.session_state.dataset_key = dataset_key
+    st.session_state.model_trained = False
+    st.session_state.model_name = f"model_{dataset_key.split('.')[0]}" if dataset_key else "model"
+
 if selected_file != "Upload your own":
     file_path = os.path.join(UPLOADS_FOLDER, selected_file)
     try:
@@ -166,7 +185,7 @@ if df is not None:
                     logging.debug(f"Dropped columns: {missing_cols}")
 
     # Dataset Report
-    if profiling_available:
+    if Draghi_profiling_available:
         if st.checkbox("Generate Dataset Report", value=False):
             if st.button("🚀 Generate Report"):
                 with st.spinner("Generating Report..."):
@@ -307,7 +326,7 @@ if df is not None:
             ])
 
             # Cross-Validation
-            cv_folds = st.slider("Cross-Validation Folds", 3, 5, 3, key="cv_folds")
+            cv_folds = st.slider("Cross-Validation Folds", 3, 5, 3, key="cv_f Ascolta ora (Playback Speed) 🔊
 
             # Train Model
             if st.button("🚀 Train Model"):
@@ -320,12 +339,14 @@ if df is not None:
 
                     # Save Model
                     st.session_state.model_name = st.text_input("Model Name", st.session_state.model_name, key="model_name")
-                    joblib.dump(pipeline, f"{st.session_state.model_name}.pkl")
+                    model_path = os.path.join(MODEL_DIR, f"{st.session_state.model_name}.pkl")
+                    joblib.dump(pipeline, model_path)
+                    st.session_state.model_trained = True
                     
                     # ZIP Outputs
                     zip_buffer = io.BytesIO()
                     with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
-                        with open(f"{st.session_state.model_name}.pkl", "rb") as f:
+                        with open(model_path, "rb") as f:
                             zip_file.writestr(f"{st.session_state.model_name}.pkl", f.read())
                         y_pred = pipeline.predict(X_test)
                         metrics = {}
@@ -346,7 +367,7 @@ if df is not None:
                     href = f'<a href="data:application/zip;base64,{b64}" download="{st.session_state.model_name}_outputs.zip">Download Model + Metrics</a>'
                     st.markdown(href, unsafe_allow_html=True)
 
-                    st.write(f"✅ Model Trained Successfully!")
+                    st.success(f"✅ Model Trained Successfully!")
                     st.write(f"📊 **Model:** {selected_model_name}")
                     st.write(f"🎯 **CV Score (Mean):** {np.mean(scores):.2f} (±{np.std(scores):.2f})")
                     if debug_mode:
@@ -441,24 +462,32 @@ if df is not None:
     # Live Prediction
     with st.sidebar:
         st.header("🔮 Live Prediction")
-        if os.path.exists(f"{st.session_state.model_name}.pkl"):
-            model = joblib.load(f"{st.session_state.model_name}.pkl")
-            input_data = {}
-            for col in feature_columns:
-                if col in cat_cols:
-                    unique_vals = df[col].dropna().unique()
-                    input_data[col] = st.selectbox(f"Select {col}", unique_vals, key=f"pred_{col}")
-                else:
-                    min_val, max_val = float(df[col].min()), float(df[col].max())
-                    input_data[col] = st.slider(f"Enter {col}", min_val, max_val, float(df[col].mean()), key=f"pred_{col}")
-            
-            if st.button("Predict"):
-                try:
-                    df_input = pd.DataFrame([input_data])
-                    prediction = model.predict(df_input)[0]
-                    st.write(f"**Prediction: {prediction}**")
-                    if debug_mode:
-                        logging.debug(f"Prediction: {prediction}, input: {input_data}")
-                except Exception as e:
-                    st.error(f"❌ Prediction Failed: Ensure valid inputs. Error: {str(e)}")
-                    logging.error(f"Prediction failed: {str(e)}", exc_info=True)
+        model_path = os.path.join(MODEL_DIR, f"{st.session_state.model_name}.pkl")
+        if not st.session_state.model_trained or not os.path.exists(model_path):
+            st.warning("⚠ No trained model available. Please train a model first.")
+        else:
+            try:
+                model = joblib.load(model_path)
+                input_data = {}
+                for col in feature_columns:
+                    if col in cat_cols:
+                        unique_vals = df[col].dropna().unique()
+                        input_data[col] = st.selectbox(f"Select {col}", unique_vals, key=f"pred_{col}")
+                    else:
+                        min_val, max_val = float(df[col].min()), float(df[col].max())
+                        input_data[col] = st.slider(f"Enter {col}", min_val, max_val, float(df[col].mean()), key=f"pred_{col}")
+                
+                if st.button("Predict"):
+                    try:
+                        df_input = pd.DataFrame([input_data])
+                        prediction = model.predict(df_input)[0]
+                        st.write(f"**Prediction: {prediction}**")
+                        if debug_mode:
+                            logging.debug(f"Prediction: {prediction}, input: {input_data}")
+                    except Exception as e:
+                        st.error(f"❌ Prediction Failed: Ensure valid inputs. Error: {str(e)}")
+                        logging.error(f"Prediction failed: {str(e)}", exc_info=True)
+            except Exception as e:
+                st.error(f"❌ Failed to load model: {str(e)}. Please train a new model.")
+                logging.error(f"Model loading failed: {str(e)}", exc_info=True)
+```
