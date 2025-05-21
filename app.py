@@ -1,4 +1,3 @@
-```python
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -185,7 +184,7 @@ if df is not None:
                     logging.debug(f"Dropped columns: {missing_cols}")
 
     # Dataset Report
-    if Draghi_profiling_available:
+    if profiling_available:
         if st.checkbox("Generate Dataset Report", value=False):
             if st.button("🚀 Generate Report"):
                 with st.spinner("Generating Report..."):
@@ -326,7 +325,8 @@ if df is not None:
             ])
 
             # Cross-Validation
-            cv_folds = st.slider("Cross-Validation Folds", 3, 5, 3, key="cv_f Ascolta ora (Playback Speed) 🔊
+            # WARNING: Do not manually edit this line to avoid syntax errors
+            cv_folds = st.slider("Cross-Validation Folds", 3, 5, 3, key="cv_folds")
 
             # Train Model
             if st.button("🚀 Train Model"):
@@ -490,4 +490,3 @@ if df is not None:
             except Exception as e:
                 st.error(f"❌ Failed to load model: {str(e)}. Please train a new model.")
                 logging.error(f"Model loading failed: {str(e)}", exc_info=True)
-```
