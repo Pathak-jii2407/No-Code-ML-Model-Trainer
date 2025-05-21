@@ -1,3 +1,4 @@
+
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -198,32 +199,6 @@ if df is not None:
 
             selected_model_name = st.selectbox("🛠 Select Model", list(model_options[task_type].keys()), key="model_select")
             
-            # Neural Network Configuration
-            if selected_model_name == "Neural Network" and tensorflow_available:
-                num_features = len([col for col in df.columns if col != target_column])
-                hidden_layers = st.slider("Number of Hidden Layers", 1, 5, 1, key="nn_layers")
-                nodes_per_layer = st.slider("Nodes per Hidden Layer", 8, 128, 32, 8, key="nn_nodes")
-                activation = st.selectbox("Activation Function", ["relu", "tanh", "sigmoid"], key="nn_activation")
-                
-                def build_nn_classifier():
-                    model = Sequential()
-                    model.add(Dense(nodes_per_layer, input_dim=num_features, activation=activation))
-                    for _ in range(hidden_layers - 1):
-                        model.add(Dense(nodes_per_layer, activation=activation))
-                    output_units = len(np.unique(df[target_column])) if task_type == "Classification" else 1
-                    output_activation = "softmax" if task_type == "Classification" and output_units > 2 else "sigmoid" if task_type == "Classification" else "linear"
-                    model.add(Dense(output_units, activation=output_activation))
-                    loss = "sparse_categorical_crossentropy" if task_type == "Classification" and output_units > 2 else "binary_crossentropy" if task_type == "Classification" else "mse"
-                    model.compile(loss=loss, optimizer="adam", metrics=["accuracy"] if task_type == "Classification" else ["mse"])
-                    return model
-                
-                model = KerasClassifier(model=build_nn_classifier, epochs=50, batch_size=32, verbose=0) if task_type == "Classification" else \
-                        KerasRegressor(model=build_nn_classifier, epochs=50, batch_size=32, verbose=0)
-                if debug_mode:
-                    logging.debug(f"Neural Network configured: layers={hidden_layers}, nodes={nodes_per_layer}, activation={activation}")
-            else:
-                model = model_options[task_type][selected_model_name]
-
             # Feature Selection
             feature_columns = [col for col in df.columns if col != target_column]
             X = df[feature_columns]
@@ -231,20 +206,29 @@ if df is not None:
 
             # Identify Numeric & Categorical Columns
             num_cols = X.select_dtypes(include=['int64', 'float64']).columns
-            cat_cols = X.select_dtypes(include=['object']).columns
-            st.write(f"📌 **Categorical Columns (One-Hot Encoded):** {cat_cols}")
+            cat_cols = X.select_dtypes(exclude=['int64', 'float64']).columns  # Treat all non-numeric as categorical
+            st.write(f"📌 **Categorical Columns (One-Hot Encoded):** {cat_cols.tolist()}")
             if debug_mode:
                 logging.debug(f"Features: numeric={num_cols.tolist()}, categorical={cat_cols.tolist()}")
 
-            # Imputation and Scaling
-            imputation_strategy = st.selectbox("Select Imputation Strategy for Numeric Columns", 
-                                              ["Mean", "Median", "Most Frequent", "Constant"], key="imputation")
-            num_imputer = SimpleImputer(strategy=imputation_strategy.lower() if imputation_strategy != "Constant" else "constant", 
-                                       fill_value=0 if imputation_strategy == "Constant" else None)
-            scaling_option = st.radio("⚖ Select Feature Scaling Method", ["StandardScaler", "MinMaxScaler"], key="scaling")
-            scaler = StandardScaler() if scaling_option == "StandardScaler" else MinMaxScaler()
+            # Data Validation
+            non_numeric_cols = X.select_dtypes(exclude=['int64', 'float64']).columns
+            if len(non_numeric_cols) > len(cat_cols):
+                st.error(f"❌ Non-numeric columns detected: {non_numeric_cols.tolist()}. Please mark them as categorical or drop them.")
+                logging.error(f"Non-numeric columns not marked as categorical: {non_numeric_cols.tolist()}")
+                st.stop()
+            if X.isna().any().any() or y.isna().any():
+                st.error("❌ Missing values detected in data. Please use imputation or clean the dataset.")
+                logging.error("Missing values detected in data")
+                st.stop()
+            if task_type == "Classification" and not np.all(y.dtypes.apply(lambda x: np.issubdtype(x, np.number))):
+                st.error("❌ Classification requires numeric target labels. Please encode the target column.")
+                logging.error("Non-numeric target labels for classification")
+                st.stop()
 
             # Preprocessing Pipeline
+            num_imputer = SimpleImputer(strategy="mean")
+            scaler = StandardScaler()
             preprocessor = ColumnTransformer([
                 ('num', Pipeline([
                     ('imputer', num_imputer),
@@ -255,6 +239,35 @@ if df is not None:
                     ('encoder', OneHotEncoder(handle_unknown='ignore', sparse_output=False))
                 ]), cat_cols)
             ])
+
+            # Neural Network Configuration
+            if selected_model_name == "Neural Network" and tensorflow_available:
+                # Fit preprocessor to get transformed feature count
+                X_sample = X.iloc[:100]  # Use a sample to avoid memory issues
+                preprocessor.fit(X_sample)
+                num_features = preprocessor.transform(X_sample).shape[1]
+                hidden_layers = st.slider("Number of Hidden Layers", 1, 5, 1, key="nn_layers")
+                nodes_per_layer = st.slider("Nodes per Hidden Layer", 8, 128, 32, 8, key="nn_nodes")
+                activation = st.selectbox("Activation Function", ["relu", "tanh", "sigmoid"], key="nn_activation")
+                
+                def build_nn_classifier():
+                    model = Sequential()
+                    model.add(Dense(nodes_per_layer, input_dim=num_features, activation=activation))
+                    for _ in range(hidden_layers - 1):
+                        model.add(Dense(nodes_per_layer, activation=activation))
+                    output_units = len(np.unique(y)) if task_type == "Classification" else 1
+                    output_activation = "softmax" if task_type == "Classification" and output_units > 2 else "sigmoid" if task_type == "Classification" else "linear"
+                    model.add(Dense(output_units, activation=output_activation))
+                    loss = "sparse_categorical_crossentropy" if task_type == "Classification" and output_units > 2 else "binary_crossentropy" if task_type == "Classification" else "mse"
+                    model.compile(loss=loss, optimizer="adam", metrics=["accuracy"] if task_type == "Classification" else ["mse"])
+                    return model
+                
+                model = KerasClassifier(model=build_nn_classifier, epochs=50, batch_size=32, verbose=0) if task_type == "Classification" else \
+                        KerasRegressor(model=build_nn_classifier, epochs=50, batch_size=32, verbose=0)
+                if debug_mode:
+                    logging.debug(f"Neural Network configured: input_dim={num_features}, layers={hidden_layers}, nodes={nodes_per_layer}, activation={activation}")
+            else:
+                model = model_options[task_type][selected_model_name]
 
             # Hyperparameter Tuning Options
             hyperparams = {}
@@ -304,8 +317,8 @@ if df is not None:
                         param_combinations = list(itertools.product(*[param_grid[p] for p in param_grid]))
                         total_iterations = len(param_combinations)
                         for idx, params in enumerate(param_combinations):
-                            param_dict = {f"model__{k.split('__')[-1]}": v for k, v in zip(param_grid.keys(), params)}
-                            model.set_params(**param_dict)
+                            param_dict = {k: v for k, v in zip(param_grid.keys(), params)}
+                            pipeline.set_params(**param_dict)
                             scores = cross_val_score(pipeline, X, y, cv=cv_folds, scoring="accuracy" if task_type == "Classification" else "neg_mean_squared_error")
                             tuning_results.append({
                                 **{k.split('__')[-1]: v for k, v in param_dict.items()},
@@ -362,21 +375,6 @@ if df is not None:
             # Train Model
             if train_option == "Auto Train" or st.button("🚀 Train Model"):
                 try:
-                    # Validate data
-                    if X.isna().any().any() or y.isna().any():
-                        st.error("❌ Data contains missing values. Please use imputation or clean the dataset.")
-                        logging.error("Missing values detected in data")
-                        st.stop()
-                    if not np.all(X.dtypes.apply(lambda x: np.issubdtype(x, np.number))) and not cat_cols.any():
-                        st.error("❌ Non-numeric features detected without categorical encoding. Please encode categorical columns.")
-                        logging.error("Non-numeric features detected")
-                        st.stop()
-                    if selected_model_name == "Neural Network" and tensorflow_available:
-                        if task_type == "Classification" and not np.all(y.dtypes.apply(lambda x: np.issubdtype(x, np.integer))):
-                            st.error("❌ Neural network classification requires integer-encoded target labels.")
-                            logging.error("Invalid target labels for neural network classification")
-                            st.stop()
-
                     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
                     with st.spinner("Training Model..."):
                         progress_bar = st.progress(0)
@@ -517,9 +515,10 @@ if df is not None:
                         progress_bar = st.progress(0)
                         comparison_results = []
                         for idx, (name, model) in enumerate(model_options[task_type].items()):
-                            if name == "Neural Network" and not tensorflow_available:
-                                continue
-                            pipeline = Pipeline([('preprocess', preprocessor), ('model', model)])
+                            if name == "Neural Network" and tensorflow_available:
+                                pipeline = Pipeline([('preprocess', preprocessor), ('model', model)])
+                            else:
+                                pipeline = Pipeline([('preprocess', preprocessor), ('model', model)])
                             scoring = "accuracy" if task_type == "Classification" else "neg_mean_squared_error"
                             scores = cross_val_score(pipeline, X, y, cv=cv_folds, scoring=scoring)
                             comparison_results.append({"Model": name, "Mean CV Score": float(np.mean(scores)), "Std CV Score": float(np.std(scores))})
